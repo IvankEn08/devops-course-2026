@@ -50,3 +50,12 @@ sudo ufw enable
 | 01-clean-install | чистая установка Ubuntu Server, обновления применены, установлен openssh-server, ВМ выключена |
 | 02-keys-configured | создан пользователь devops, настроена ключевая аутентификация, `~/.ssh/config` на хосте |
 | 03-ssh-hardened | усилена защита sshd (порт 2222), правило проброса приведено к 2222 |
+| 04-nginx-https | установлен Nginx, ресурс devops.local опубликован по HTTPS, HTTP перенаправляется на HTTPS |
+
+## 8. Веб-сервер
+- Пакет: `nginx` (1.24.0, Ubuntu 24.04), установка `sudo apt update && sudo apt install -y nginx`; главный процесс от root, рабочие — от www-data. Правила UFW для 80 и 443 уже существуют (профиль `Nginx Full` не применяется).
+- Конфигурация ресурса: `/etc/nginx/sites-available/devops-site`, активирована ссылкой `/etc/nginx/sites-enabled/devops-site`; стандартный ресурс отключён (`sudo rm /etc/nginx/sites-enabled/default`, файл `default` в sites-available сохранён). Два блока server: порт 80 (`server_name devops.local`, `return 301 https://$host$request_uri;`) и порт 443 (`listen 443 ssl; listen [::]:443 ssl;`, `ssl_certificate /etc/ssl/certs/devops.crt;`, `ssl_certificate_key /etc/ssl/private/devops.key;`, `ssl_protocols TLSv1.2 TLSv1.3;`, `root /var/www/devops-site;`, `index index.html;`, `location / { try_files $uri $uri/ =404; }`, `error_page 404 /404.html;`, журналы `/var/log/nginx/devops-site.access.log` и `devops-site.error.log`). HSTS не добавляется.
+- Каталог ресурса: `/var/www/devops-site`, владелец `devops:devops`, каталог 755, файлы 644; содержимое доставляется с хоста `scripts/deploy.sh` (`rsync -avz --delete --chmod=D755,F644 site/ devops:/var/www/devops-site/`); создание: `sudo mkdir -p /var/www/devops-site && sudo chown -R devops:devops /var/www/devops-site`.
+- Сертификат: `/etc/ssl/certs/devops.crt` (права 644, владелец root, самоподписанный, CN=devops.local, SAN `DNS:devops.local`, срок 365 дней); закрытый ключ `/etc/ssl/private/devops.key` (права 600, владелец root, за пределы каталога не копируется, в репозиторий не добавляется).
+- Команда формирования: `sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/devops.key -out /etc/ssl/certs/devops.crt -subj "/CN=devops.local" -addext "subjectAltName=DNS:devops.local"`. Сертификат копируется на хост командой `scp devops:/etc/ssl/certs/devops.crt ~/devops.crt` и указывается клиенту через `curl --cacert`.
+- Применение конфигурации: только `sudo nginx -t && sudo systemctl reload nginx` (не `restart`).
