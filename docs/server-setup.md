@@ -51,6 +51,7 @@ sudo ufw enable
 | 02-keys-configured | создан пользователь devops, настроена ключевая аутентификация, `~/.ssh/config` на хосте |
 | 03-ssh-hardened | усилена защита sshd (порт 2222), правило проброса приведено к 2222 |
 | 04-nginx-https | установлен Nginx, ресурс devops.local опубликован по HTTPS, HTTP перенаправляется на HTTPS |
+| 05-docker-compose | установлен Docker Engine, проект ~/app (приложение + PostgreSQL) запущен через Docker Compose |
 
 ## 8. Веб-сервер
 - Пакет: `nginx` (1.24.0, Ubuntu 24.04), установка `sudo apt update && sudo apt install -y nginx`; главный процесс от root, рабочие — от www-data. Правила UFW для 80 и 443 уже существуют (профиль `Nginx Full` не применяется).
@@ -59,3 +60,14 @@ sudo ufw enable
 - Сертификат: `/etc/ssl/certs/devops.crt` (права 644, владелец root, самоподписанный, CN=devops.local, SAN `DNS:devops.local`, срок 365 дней); закрытый ключ `/etc/ssl/private/devops.key` (права 600, владелец root, за пределы каталога не копируется, в репозиторий не добавляется).
 - Команда формирования: `sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/devops.key -out /etc/ssl/certs/devops.crt -subj "/CN=devops.local" -addext "subjectAltName=DNS:devops.local"`. Сертификат копируется на хост командой `scp devops:/etc/ssl/certs/devops.crt ~/devops.crt` и указывается клиенту через `curl --cacert`.
 - Применение конфигурации: только `sudo nginx -t && sudo systemctl reload nginx` (не `restart`).
+
+## 9. Контейнеризация
+- Docker Engine установлен из официального репозитория download.docker.com (не пакет docker.io): пакеты `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`; версия Docker Engine 29.9.2, Docker Compose v5.6.1. Репозиторий: `/etc/apt/sources.list.d/docker.list`, ключ `/etc/apt/keyrings/docker.asc`. Служба `docker` включена и запускается автоматически.
+- Группа `docker`: участник — `devops` (команда `sudo usermod -aG docker devops`, после неё нужна новая SSH-сессия); участник группы фактически имеет права root, поэтому в группу включаются только учётные записи с правом sudo.
+- Проект на сервере: `/home/devops/app` (доставляется с хоста `rsync -avz --delete --exclude=.env app/ devops:app/`); файлы: `Dockerfile`, `.dockerignore`, `app.py`, `requirements.txt`, `docker-compose.yml`, `.env.example`; имя проекта Compose — `app` (контейнеры `app-app-1` и `app-db-1`).
+- Файл `.env`: `/home/devops/app/.env`, права 600, владелец devops, формируется только на сервере (`cp .env.example .env`, пароль PostgreSQL — `openssl rand -hex 16`), в репозиторий и образ не попадает (`.gitignore`, `.dockerignore`, `--exclude=.env` при rsync).
+- Образы: `devops-app:1.0` (сборка из `Dockerfile` на основе `python:3.12-slim`, процесс от пользователя `app`, CMD в exec-форме) и `postgres:16-alpine` (тег фиксирует основную версию).
+- Публикуемые порты и адреса: приложение — только `127.0.0.1:5000` (`"127.0.0.1:5000:5000"`); порт PostgreSQL 5432 не публикуется, приложение обращается к СУБД по имени сервиса `db` внутри пользовательской сети `backend` (`app_backend`). Порт, опубликованный на `0.0.0.0`, доступен из сети в обход UFW (Docker добавляет правила iptables в цепочку DOCKER).
+- Именованные тома: `app_db_data` (каталог данных PostgreSQL `/var/lib/postgresql/data`); `docker compose down` том сохраняет, `docker compose down -v` удаляет вместе с данными.
+- Обратный прокси-сервер: в блок HTTPS `/etc/nginx/sites-available/devops-site` добавлено `location /app/ { proxy_pass http://127.0.0.1:5000/; proxy_set_header Host $host; proxy_set_header X-Real-IP $remote_addr; proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; proxy_set_header X-Forwarded-Proto $scheme; }`; статический ресурс `location /` сохранён. Применение: `sudo nginx -t && sudo systemctl reload nginx`. При остановленном приложении Nginx возвращает 502 (`connect() failed (111: Connection refused) while connecting to upstream` в `/var/log/nginx/devops-site.error.log`).
+- Запуск и остановка проекта: `cd ~/app && docker compose up -d --build`, `docker compose ps`, `docker compose down`; перезапуск при перезагрузке сервера обеспечивает `restart: unless-stopped`.

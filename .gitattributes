@@ -1,2 +1,4 @@
 *.sh text eol=lf
 site/* text eol=lf
+app/* text eol=lf
+app/.dockerignore text eol=lf

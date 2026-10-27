@@ -26,5 +26,10 @@ check "Конфигурация nginx синтаксически коррект�
 check "Сертификат devops.crt действителен не менее ${CERT_DAYS:-30} дней" "0" "$(openssl x509 -checkend $(( ${CERT_DAYS:-30} * 24 * 3600 )) -noout -in /etc/ssl/certs/devops.crt >/dev/null; echo $?)"
 check "В каталоге ресурса нет файлов, доступных для записи всем" "0" "$(find /var/www/devops-site -perm -o+w | wc -l)"
 check "Права закрытого ключа равны 600" "600" "$(sudo stat -c '%a' /etc/ssl/private/devops.key)"
+echo "[5] Контейнеризация"
+check "Служба docker активна" "active" "$(systemctl is-active docker)"
+check "Контейнер СУБД находится в состоянии healthy" "healthy" "$(docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null)"
+check "Порты 5000 и 5432 не прослушиваются вне 127.0.0.1" "0" "$(ss -tln | awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127\.0\.0\.1:/' | wc -l)"
+check "Права файла ~/app/.env равны 600" "600" "$(stat -c '%a' "${HOME}/app/.env")"
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
